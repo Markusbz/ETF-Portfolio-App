@@ -8,6 +8,8 @@ from pathlib import Path
 # --- Browser & Driver Paths ---
 # Please ensure these paths point to your actual browser executable and the
 # corresponding WebDriver executable.
+# newest chromedriver version is available here:
+# https://googlechromelabs.github.io/chrome-for-testing/#stable
 BRAVE_BROWSER_PATH = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
 CHROMEDRIVER_PATH = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\chromedriver.exe"
 

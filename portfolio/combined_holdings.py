@@ -4,7 +4,7 @@ import numpy as np
 def _calculate_portfolio_weights(portfolio: pd.DataFrame, detailed_fund_data: dict) -> dict:
     if "shares" in portfolio.columns:
         abs_value_dict = {
-            ticker: detailed_fund_data[ticker]["historical"].iloc[0]["NAV"] *
+            ticker: detailed_fund_data[ticker]["historical"].iloc[0]["NAV"] * detailed_fund_data[ticker]["historical"].iloc[0]["fx_rate"] *
             portfolio.loc[portfolio["ticker"] == ticker, "shares"].values[0]
             for ticker in portfolio["ticker"]
         }

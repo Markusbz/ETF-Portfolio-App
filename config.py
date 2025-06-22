@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from pathlib import Path
 
 # -----------------------------------------------------------------------------
@@ -35,10 +36,13 @@ PROVIDER_PREFIXES = {
     "ishares", "vanguard", "spdr", "xtrackers", "lyxor",
     "invesco", "ubs", "amundi", "wisdomtree",
 }
-FUND_LIST_UPDATE_PERIOD = "6m"
+FUND_LIST_UPDATE_PERIOD = timedelta(months=2)
 
 # --- Dashboard Settings ---
 # Number of top holdings to display in the dashboard table.
 TOP_N_HOLDINGS = 200
+
+# Selectable currencies for the portfolio's base currency.
+PORTFOLIO_CURRENCIES = ["USD", "EUR", "GBP", "CHF", "JPY", "SGD"]
 
 print(f"Config loaded. Data directory set to: {DATA_DIR.resolve()}")

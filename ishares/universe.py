@@ -39,7 +39,7 @@ def load_or_scrape(force: bool = False,
     """
     if _CACHE.exists() and not force:
         age = dt.datetime.now() - dt.datetime.fromtimestamp(_CACHE.stat().st_mtime)
-        if age < dt.timedelta(days=5):
+        if age < config.FUND_LIST_UPDATE_PERIOD:
             return pd.read_parquet(_CACHE)
 
     q: queue.Queue[float] = queue.Queue()

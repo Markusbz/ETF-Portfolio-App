@@ -38,10 +38,11 @@ class FundSelectorApp(ctk.CTk):
         self.geometry("1500x850")
         self.minsize(1300, 750)
 
+        # --- Initialize Fonts & Variables ---
         self.listbox_font = ctk.CTkFont(size=13)
         self.table_header_font = ctk.CTkFont(size=13, weight="bold")
         self.table_row_font = ctk.CTkFont(size=12)
-
+        
         self.portfolio: list[pd.DataFrame] = [] 
         self.fund_data: pd.DataFrame = pd.DataFrame() 
         self.detailed_fund_data: dict[str, dict[str, pd.DataFrame]] = {} 
@@ -55,14 +56,33 @@ class FundSelectorApp(ctk.CTk):
         self.dist_trace_id: str | None = None
         self.is_loading_data: bool = False 
         self.is_downloading_details: bool = False
+        self.portfolio_currency_var = tk.StringVar(value=config.PORTFOLIO_CURRENCIES[0])
 
+        # --- Main UI Structure ---
+        top_bar_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_bar_frame.pack(fill="x", padx=20, pady=(10,0))
+        top_bar_frame.grid_columnconfigure(2, weight=1) 
+        
+        ctk.CTkLabel(top_bar_frame, text="Portfolio Currency:").grid(row=0, column=0, padx=(0,5), pady=10)
+        self.portfolio_currency_dd = ctk.CTkOptionMenu(
+            top_bar_frame, variable=self.portfolio_currency_var,
+            values=config.PORTFOLIO_CURRENCIES, width=100
+        )
+        self.portfolio_currency_dd.grid(row=0, column=1, padx=(0,20), pady=10)
+
+        self.fund_universe_progress = ctk.CTkProgressBar(top_bar_frame, mode="determinate") 
+        self.fund_universe_progress.grid(row=0, column=2, sticky="ew", padx=(0,10), pady=10)
+        self.fund_universe_progress.set(0)
+        self.fund_universe_progress.grid_remove()
+        
+        self.update_btn = ctk.CTkButton(top_bar_frame, text="⬇  Update Fund List", width=170, command=self.refresh_universe)
+        self.update_btn.grid(row=0, column=3, pady=10)
+        
         self.tab_view = ctk.CTkTabview(self, anchor="nw")
-        self.tab_view.pack(expand=True, fill="both", padx=10, pady=10)
-
+        self.tab_view.pack(expand=True, fill="both", padx=10, pady=(0,10))
         self.portfolio_builder_tab = self.tab_view.add("Portfolio Builder")
         self.data_center_tab = self.tab_view.add("Data Center")
         self.dashboard_tab = self.tab_view.add("Portfolio Dashboard") 
-        
         self.tab_view.set("Portfolio Builder") 
 
         self._create_portfolio_builder_ui(self.portfolio_builder_tab)
@@ -73,25 +93,13 @@ class FundSelectorApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _create_portfolio_builder_ui(self, tab_frame: ctk.CTkFrame):
+        tab_frame.grid_rowconfigure(1, weight=1) # Main content is on row 1 now
         tab_frame.grid_columnconfigure(0, weight=10, uniform="cols_main_pb") 
         tab_frame.grid_columnconfigure(1, weight=3, uniform="cols_main_pb")  
         tab_frame.grid_columnconfigure(2, weight=10, uniform="cols_main_pb") 
-        tab_frame.grid_rowconfigure(2, weight=1) 
-        
-        top_bar_frame = ctk.CTkFrame(tab_frame, fg_color="transparent")
-        top_bar_frame.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(10,5), padx=20)
-        top_bar_frame.grid_columnconfigure(0, weight=1)
-        
-        self.fund_universe_progress = ctk.CTkProgressBar(top_bar_frame, mode="determinate") 
-        self.fund_universe_progress.grid(row=0, column=0, sticky="ew", padx=(0,10))
-        self.fund_universe_progress.set(0)
-        self.fund_universe_progress.grid_remove()
-        
-        self.update_btn = ctk.CTkButton(top_bar_frame, text="⬇  Update Fund List", width=170, command=self.refresh_universe)
-        self.update_btn.grid(row=0, column=1)
         
         filter_frame = ctk.CTkFrame(tab_frame, fg_color="transparent")
-        filter_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(5, 10), padx=20) 
+        filter_frame.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(5, 10), padx=10) 
         filter_frame.grid_columnconfigure(1, weight=1) 
         
         self.provider_var = tk.StringVar(value="All")
@@ -104,78 +112,38 @@ class FundSelectorApp(ctk.CTk):
         self.search_entry.bind("<KeyRelease>", self.update_fund_list_display)
         
         left_panel = ctk.CTkFrame(tab_frame)
-        left_panel.grid(row=2, column=0, sticky="nsew", padx=(20,5), pady=(0,20))
-        left_panel.grid_rowconfigure(0, weight=1)
-        left_panel.grid_columnconfigure(0, weight=1)
-        
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(10,5), pady=(0,10))
+        left_panel.grid_rowconfigure(0, weight=1); left_panel.grid_columnconfigure(0, weight=1)
         self.fund_listbox = tk.Listbox(left_panel, exportselection=False, font=self.listbox_font, borderwidth=0, highlightthickness=0, relief="flat")
-        self.fund_listbox.grid(row=0, column=0, sticky="nsew")
-        lb_scroll = ctk.CTkScrollbar(left_panel, command=self.fund_listbox.yview)
-        lb_scroll.grid(row=0, column=1, sticky="ns")
-        self.fund_listbox.configure(yscrollcommand=lb_scroll.set)
-        self.fund_listbox.bind("<<ListboxSelect>>", self.on_fund_select)
+        self.fund_listbox.grid(row=0, column=0, sticky="nsew"); lb_scroll = ctk.CTkScrollbar(left_panel, command=self.fund_listbox.yview); lb_scroll.grid(row=0, column=1, sticky="ns"); self.fund_listbox.configure(yscrollcommand=lb_scroll.set); self.fund_listbox.bind("<<ListboxSelect>>", self.on_fund_select)
         
         middle_panel = ctk.CTkFrame(tab_frame)
-        middle_panel.grid(row=2, column=1, sticky="ns", padx=5, pady=(0,20))
-        options_label = ctk.CTkLabel(middle_panel, text="Fund Options", font=ctk.CTkFont(weight="bold", size=14))
-        options_label.pack(pady=(10,15), padx=10)
-        self.currency_var = tk.StringVar()
-        self.currency_dd = ctk.CTkOptionMenu(middle_panel, width=180, variable=self.currency_var, state="disabled", values=["-"])
-        self.currency_dd.pack(pady=(0,10), padx=10, fill="x")
-        self.dist_var = tk.StringVar()
-        self.dist_dd = ctk.CTkOptionMenu(middle_panel, width=180, variable=self.dist_var, state="disabled", values=["-"])
-        self.dist_dd.pack(pady=(0,10), padx=10, fill="x")
-        self.mode_var = tk.StringVar(value="percent")
-        self.mode_seg = ctk.CTkSegmentedButton(middle_panel, variable=self.mode_var, values=["percent","shares"])
-        self.mode_seg.pack(pady=(0,15), padx=10, fill="x")
-        self.add_btn = ctk.CTkButton(middle_panel, text="Add to Portfolio", command=self.add_to_portfolio, state="disabled")
-        self.add_btn.pack(pady=(0,10), padx=10, fill="x")
+        middle_panel.grid(row=1, column=1, sticky="ns", padx=5, pady=(0,10))
+        options_label = ctk.CTkLabel(middle_panel, text="Fund Options", font=ctk.CTkFont(weight="bold", size=14)); options_label.pack(pady=(10,15), padx=10)
+        self.currency_var = tk.StringVar(); self.currency_dd = ctk.CTkOptionMenu(middle_panel, width=180, variable=self.currency_var, state="disabled", values=["-"]); self.currency_dd.pack(pady=(0,10), padx=10, fill="x")
+        self.dist_var = tk.StringVar(); self.dist_dd = ctk.CTkOptionMenu(middle_panel, width=180, variable=self.dist_var, state="disabled", values=["-"]); self.dist_dd.pack(pady=(0,10), padx=10, fill="x")
+        self.mode_var = tk.StringVar(value="percent"); self.mode_seg = ctk.CTkSegmentedButton(middle_panel, variable=self.mode_var, values=["percent","shares"]); self.mode_seg.pack(pady=(0,15), padx=10, fill="x")
+        self.add_btn = ctk.CTkButton(middle_panel, text="Add to Portfolio", command=self.add_to_portfolio, state="disabled"); self.add_btn.pack(pady=(0,10), padx=10, fill="x")
         
         right_panel = ctk.CTkFrame(tab_frame)
-        right_panel.grid(row=2, column=2, sticky="nsew", padx=(5,20), pady=(0,20))
-        right_panel.grid_rowconfigure(0, weight=1)
-        right_panel.grid_columnconfigure(0, weight=1)
-        self.port_lb = tk.Listbox(right_panel, exportselection=False, font=self.listbox_font, borderwidth=0, highlightthickness=0, relief="flat")
-        self.port_lb.grid(row=0, column=0, sticky="nsew")
-        pf_scroll = ctk.CTkScrollbar(right_panel, command=self.port_lb.yview)
-        pf_scroll.grid(row=0, column=1, sticky="ns")
-        self.port_lb.configure(yscrollcommand=pf_scroll.set)
-        portfolio_buttons_frame = ctk.CTkFrame(right_panel, fg_color="transparent")
-        portfolio_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10,0))
-        portfolio_buttons_frame.grid_columnconfigure((0,1,2), weight=1) 
-        self.load_btn = ctk.CTkButton(portfolio_buttons_frame, text="Load Portfolio", command=self.load_portfolio)
-        self.load_btn.grid(row=0, column=0, padx=(0,3), sticky="ew")
-        self.save_btn = ctk.CTkButton(portfolio_buttons_frame, text="Save Portfolio", command=self.save_portfolio)
-        self.save_btn.grid(row=0, column=1, padx=3, sticky="ew")
-        self.remove_btn = ctk.CTkButton(portfolio_buttons_frame, text="Remove Selected", command=self.remove_selected)
-        self.remove_btn.grid(row=0, column=2, padx=(3,0), sticky="ew")
+        right_panel.grid(row=1, column=2, sticky="nsew", padx=(5,10), pady=(0,10)); right_panel.grid_rowconfigure(0, weight=1); right_panel.grid_columnconfigure(0, weight=1)
+        self.port_lb = tk.Listbox(right_panel, exportselection=False, font=self.listbox_font, borderwidth=0, highlightthickness=0, relief="flat"); self.port_lb.grid(row=0, column=0, sticky="nsew"); pf_scroll = ctk.CTkScrollbar(right_panel, command=self.port_lb.yview); pf_scroll.grid(row=0, column=1, sticky="ns"); self.port_lb.configure(yscrollcommand=pf_scroll.set)
+        portfolio_buttons_frame = ctk.CTkFrame(right_panel, fg_color="transparent"); portfolio_buttons_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10,0)); portfolio_buttons_frame.grid_columnconfigure((0,1,2), weight=1) 
+        self.load_btn = ctk.CTkButton(portfolio_buttons_frame, text="Load Portfolio", command=self.load_portfolio); self.load_btn.grid(row=0, column=0, padx=(0,3), sticky="ew")
+        self.save_btn = ctk.CTkButton(portfolio_buttons_frame, text="Save Portfolio", command=self.save_portfolio); self.save_btn.grid(row=0, column=1, padx=3, sticky="ew")
+        self.remove_btn = ctk.CTkButton(portfolio_buttons_frame, text="Remove Selected", command=self.remove_selected); self.remove_btn.grid(row=0, column=2, padx=(3,0), sticky="ew")
 
     def _create_data_center_ui(self, tab_frame: ctk.CTkFrame):
-        tab_frame.grid_columnconfigure(0, weight=1)
-        tab_frame.grid_rowconfigure(1, weight=1) 
-        control_frame = ctk.CTkFrame(tab_frame)
-        control_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=10)
-        control_frame.grid_columnconfigure(0, weight=1) 
-        self.detailed_data_progress = ctk.CTkProgressBar(control_frame, mode="determinate")
-        self.detailed_data_progress.grid(row=0, column=0, sticky="ew", padx=(0,10), pady=5)
-        self.detailed_data_progress.set(0)
-        self.detailed_data_progress.grid_remove() 
-        buttons_subframe = ctk.CTkFrame(control_frame, fg_color="transparent")
-        buttons_subframe.grid(row=0, column=1, sticky="e", pady=5)
-        self.download_details_btn = ctk.CTkButton(buttons_subframe, text="Download Portfolio Fund Data", command=self.trigger_detailed_data_download)
-        self.download_details_btn.pack(side=tk.LEFT, padx=(0,5))
-        self.save_details_btn = ctk.CTkButton(buttons_subframe, text="Save Downloaded Data", command=self.save_detailed_fund_data, state="disabled")
-        self.save_details_btn.pack(side=tk.LEFT, padx=5)
-        self.load_details_btn = ctk.CTkButton(buttons_subframe, text="Load Downloaded Data", command=self.load_detailed_fund_data)
-        self.load_details_btn.pack(side=tk.LEFT, padx=(5,0))
-        info_frame = ctk.CTkFrame(tab_frame)
-        info_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0,10))
-        info_frame.grid_columnconfigure(0, weight=1)
-        info_frame.grid_rowconfigure(0, weight=1) 
-        self.last_data_pull_label = ctk.CTkLabel(info_frame, text="Last Detailed Data Pull: N/A", anchor="w")
-        self.last_data_pull_label.pack(pady=5, padx=10, fill="x")
-        self.data_display_textbox = ctk.CTkTextbox(info_frame, state="disabled", wrap="word")
-        self.data_display_textbox.pack(expand=True, fill="both", padx=10, pady=(0,10))
+        tab_frame.grid_columnconfigure(0, weight=1); tab_frame.grid_rowconfigure(1, weight=1) 
+        control_frame = ctk.CTkFrame(tab_frame); control_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=10); control_frame.grid_columnconfigure(0, weight=1) 
+        self.detailed_data_progress = ctk.CTkProgressBar(control_frame, mode="determinate"); self.detailed_data_progress.grid(row=0, column=0, sticky="ew", padx=(0,10), pady=5); self.detailed_data_progress.set(0); self.detailed_data_progress.grid_remove() 
+        buttons_subframe = ctk.CTkFrame(control_frame, fg_color="transparent"); buttons_subframe.grid(row=0, column=1, sticky="e", pady=5)
+        self.download_details_btn = ctk.CTkButton(buttons_subframe, text="Download Portfolio Fund Data", command=self.trigger_detailed_data_download); self.download_details_btn.pack(side=tk.LEFT, padx=(0,5))
+        self.save_details_btn = ctk.CTkButton(buttons_subframe, text="Save Downloaded Data", command=self.save_detailed_fund_data, state="disabled"); self.save_details_btn.pack(side=tk.LEFT, padx=5)
+        self.load_details_btn = ctk.CTkButton(buttons_subframe, text="Load Downloaded Data", command=self.load_detailed_fund_data); self.load_details_btn.pack(side=tk.LEFT, padx=(5,0))
+        info_frame = ctk.CTkFrame(tab_frame); info_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0,10)); info_frame.grid_columnconfigure(0, weight=1); info_frame.grid_rowconfigure(0, weight=1) 
+        self.last_data_pull_label = ctk.CTkLabel(info_frame, text="Last Detailed Data Pull: N/A", anchor="w"); self.last_data_pull_label.pack(pady=5, padx=10, fill="x")
+        self.data_display_textbox = ctk.CTkTextbox(info_frame, state="disabled", wrap="word"); self.data_display_textbox.pack(expand=True, fill="both", padx=10, pady=(0,10))
         self._update_data_display_textbox() 
 
     def _create_dashboard_ui(self, tab_frame: ctk.CTkFrame):
@@ -187,35 +155,18 @@ class FundSelectorApp(ctk.CTk):
         top_holdings_frame.grid_columnconfigure(0, weight=1) 
         ctk.CTkLabel(top_holdings_frame, text="Top Consolidated Holdings", font=ctk.CTkFont(weight="bold", size=16)).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,5))
         holdings_cols = ("ticker", "name", "sector", "weight")
-        self.top_holdings_treeview = ttk.Treeview(top_holdings_frame, columns=holdings_cols, show="headings", height=10) 
-        self.top_holdings_treeview.heading("ticker", text="Ticker")
-        self.top_holdings_treeview.heading("name", text="Name")
-        self.top_holdings_treeview.heading("sector", text="Sector")
-        self.top_holdings_treeview.heading("weight", text="Weight (%)")
-        self.top_holdings_treeview.column("ticker", width=120, anchor=tk.W, stretch=tk.NO) 
-        self.top_holdings_treeview.column("name", width=350, anchor=tk.W, stretch=tk.YES) 
-        self.top_holdings_treeview.column("sector", width=200, anchor=tk.W, stretch=tk.NO)
-        self.top_holdings_treeview.column("weight", width=100, anchor=tk.E, stretch=tk.NO) 
+        self.top_holdings_treeview = ttk.Treeview(top_holdings_frame, columns=holdings_cols, show="headings", height=18) 
+        self.top_holdings_treeview.heading("ticker", text="Ticker"); self.top_holdings_treeview.heading("name", text="Name"); self.top_holdings_treeview.heading("sector", text="Sector"); self.top_holdings_treeview.heading("weight", text="Weight (%)")
+        self.top_holdings_treeview.column("ticker", width=120, anchor=tk.W, stretch=tk.NO); self.top_holdings_treeview.column("name", width=350, anchor=tk.W, stretch=tk.YES); self.top_holdings_treeview.column("sector", width=200, anchor=tk.W, stretch=tk.NO); self.top_holdings_treeview.column("weight", width=100, anchor=tk.E, stretch=tk.NO) 
         self.top_holdings_treeview.grid(row=1, column=0, sticky="nsew", pady=(0,5))
-        holdings_scrollbar = ctk.CTkScrollbar(top_holdings_frame, command=self.top_holdings_treeview.yview)
-        holdings_scrollbar.grid(row=1, column=1, sticky="ns", pady=(0,5))
-        self.top_holdings_treeview.configure(yscrollcommand=holdings_scrollbar.set)
-        style = ttk.Style()
-        bg_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"])
-        text_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkLabel"]["text_color"])
-        selected_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkButton"]["fg_color"])
-        style.theme_use("default")
-        style.configure("Treeview", background=bg_color, foreground=text_color, fieldbackground=bg_color, borderwidth=0, font=self.table_row_font) 
-        style.map("Treeview", background=[('selected', selected_color)], foreground=[('selected', text_color)])
-        style.configure("Treeview.Heading", background=self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["border_color"]), foreground=text_color, relief="flat", font=self.table_header_font, padding=(5,5)) 
-        style.map("Treeview.Heading", background=[('active', self._apply_appearance_mode(ctk.ThemeManager.theme["CTkButton"]["hover_color"]))])
-        self.refresh_dashboard_btn = ctk.CTkButton(top_holdings_frame, text="Refresh Dashboard Data", command=self._update_dashboard_displays)
-        self.refresh_dashboard_btn.grid(row=2, column=0, columnspan=2, sticky="w", pady=10)
-        pie_chart_frame = ctk.CTkFrame(scrollable_dashboard_frame)
-        pie_chart_frame.grid(row=1, column=0, sticky="new", padx=10, pady=10)
+        holdings_scrollbar = ctk.CTkScrollbar(top_holdings_frame, command=self.top_holdings_treeview.yview); holdings_scrollbar.grid(row=1, column=1, sticky="ns", pady=(0,5)); self.top_holdings_treeview.configure(yscrollcommand=holdings_scrollbar.set)
+        style = ttk.Style(); bg_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"]); text_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkLabel"]["text_color"]); selected_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkButton"]["fg_color"])
+        style.theme_use("default"); style.configure("Treeview", background=bg_color, foreground=text_color, fieldbackground=bg_color, borderwidth=0, font=self.table_row_font); style.map("Treeview", background=[('selected', selected_color)], foreground=[('selected', text_color)])
+        style.configure("Treeview.Heading", background=self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["border_color"]), foreground=text_color, relief="flat", font=self.table_header_font, padding=(5,5)); style.map("Treeview.Heading", background=[('active', self._apply_appearance_mode(ctk.ThemeManager.theme["CTkButton"]["hover_color"]))])
+        self.refresh_dashboard_btn = ctk.CTkButton(top_holdings_frame, text="Refresh Dashboard Data", command=self._update_dashboard_displays); self.refresh_dashboard_btn.grid(row=2, column=0, columnspan=2, sticky="w", pady=10)
+        pie_chart_frame = ctk.CTkFrame(scrollable_dashboard_frame); pie_chart_frame.grid(row=1, column=0, sticky="new", padx=10, pady=10)
         ctk.CTkLabel(pie_chart_frame, text="Portfolio Allocation", font=ctk.CTkFont(weight="bold", size=16)).pack(anchor="w", pady=(0,5))
-        self.allocation_chart_btn = ctk.CTkButton(pie_chart_frame, text="Show Allocation Chart (External)", command=self._generate_allocation_chart)
-        self.allocation_chart_btn.pack(pady=5, anchor="w")
+        self.allocation_chart_btn = ctk.CTkButton(pie_chart_frame, text="Show Allocation Chart (External)", command=self._generate_allocation_chart); self.allocation_chart_btn.pack(pady=5, anchor="w")
         self._update_top_holdings_display() 
 
     def _apply_appearance_mode(self, color_tuple_or_str):
@@ -800,7 +751,7 @@ class FundSelectorApp(ctk.CTk):
                         print(f"Downloading: {fund_tkr} ({fund_link})")
                         xls_link = sess.xls_link_from_product_page(fund_link)
                         xls_path = sess.download_xls(xls_link, overwrite=True)
-                        sheets = SheetsCls(xls_path)
+                        sheets = SheetsCls(xls_path, portfolio_currency= self.portfolio_currency_var.get())
                         hld = sheets.holdings.copy() if sheets.holdings is not None else pd.DataFrame()
                         hist = sheets.historical.copy() if sheets.historical is not None else pd.DataFrame()
                         distrib = sheets.distributions.copy() if sheets.distributions is not None else pd.DataFrame()
@@ -874,9 +825,9 @@ class FundSelectorApp(ctk.CTk):
                 loaded_data[tkr]["holdings"] = pd.read_parquet(hld_p) if hld_p.exists() else pd.DataFrame()
                 if hist_p.exists(): 
                     hist_df = pd.read_parquet(hist_p) 
-                    if "As Of" in hist_df.columns: 
-                        hist_df["As Of"] = pd.to_datetime(hist_df["As Of"])
-                        hist_df = hist_df.set_index("As Of")
+                    if "date" in hist_df.columns: 
+                        hist_df["date"] = pd.to_datetime(hist_df["date"])
+                        hist_df = hist_df.set_index("date")
                     loaded_data[tkr]["historical"] = hist_df
                 else: 
                     loaded_data[tkr]["historical"] = pd.DataFrame()

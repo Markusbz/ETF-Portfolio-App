@@ -8,6 +8,10 @@ from contextlib import suppress
 from collections import defaultdict
 from tkinter import messagebox, ttk
 from pathlib import Path
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import json
 import threading
 import time
@@ -15,19 +19,14 @@ import webbrowser
 from ..ishares import universe
 from ..ishares.fetch import IsharesSession
 from ..ishares.parse import FundSheets
-from ..portfolio.combined_holdings import calculate_combined_holdings
+from ..portfolio.combined_holdings import calculate_combined_holdings, calculate_portfolio_weights
+from ..portfolio.backtester import PortfolioBackteser
+from ..plotting.plotly_charts import plot_backtest_results
 from .. import config
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
-# config.BRAVE_BROWSER_PATH  = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
-# config.CHROMEDRIVER_PATH = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\chromedriver.exe"
-
-# config.PROVIDER_PREFIXES = {
-#     "ishares","vanguard","spdr","xtrackers","lyxor",
-#     "invesco","ubs","amundi","wisdomtree",
-# }
 Path("data/raw").mkdir(parents=True, exist_ok=True)
 ctk.set_appearance_mode("dark"); ctk.set_default_color_theme("green") 
 
@@ -38,14 +37,13 @@ class FundSelectorApp(ctk.CTk):
         self.geometry("1500x850")
         self.minsize(1300, 750)
 
-        # --- Initialize Fonts & Variables ---
         self.listbox_font = ctk.CTkFont(size=13)
         self.table_header_font = ctk.CTkFont(size=13, weight="bold")
         self.table_row_font = ctk.CTkFont(size=12)
         
         self.portfolio: list[pd.DataFrame] = [] 
         self.fund_data: pd.DataFrame = pd.DataFrame() 
-        self.detailed_fund_data: dict[str, dict[str, pd.DataFrame]] = {} 
+        self.detailed_fund_data: dict[str, dict[str, pd.DataFrame]] = {}
         self.last_data_pull_info: dict | None = None 
         self.display_map: dict[str, str] = {}
         self.full_to_disp: dict[str, str] = {}
@@ -93,7 +91,7 @@ class FundSelectorApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _create_portfolio_builder_ui(self, tab_frame: ctk.CTkFrame):
-        tab_frame.grid_rowconfigure(1, weight=1) # Main content is on row 1 now
+        tab_frame.grid_rowconfigure(1, weight=1)
         tab_frame.grid_columnconfigure(0, weight=10, uniform="cols_main_pb") 
         tab_frame.grid_columnconfigure(1, weight=3, uniform="cols_main_pb")  
         tab_frame.grid_columnconfigure(2, weight=10, uniform="cols_main_pb") 
@@ -150,23 +148,66 @@ class FundSelectorApp(ctk.CTk):
         scrollable_dashboard_frame = ctk.CTkScrollableFrame(tab_frame, fg_color="transparent")
         scrollable_dashboard_frame.pack(expand=True, fill="both")
         scrollable_dashboard_frame.grid_columnconfigure(0, weight=1)
+        
+        dashboard_controls_frame = ctk.CTkFrame(scrollable_dashboard_frame)
+        dashboard_controls_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        self.refresh_dashboard_btn = ctk.CTkButton(dashboard_controls_frame, text="Refresh Dashboard Data", command=self._update_dashboard_displays)
+        self.refresh_dashboard_btn.pack(side=tk.LEFT, padx=(0,20), pady=10)
+
+        self.portfolio_total_value_label = ctk.CTkLabel(dashboard_controls_frame, text="Total Portfolio Value: N/A", font=ctk.CTkFont(weight="bold"))
+        self.portfolio_total_value_label.pack(side=tk.LEFT, padx=10, pady=10)
+
         top_holdings_frame = ctk.CTkFrame(scrollable_dashboard_frame)
-        top_holdings_frame.grid(row=0, column=0, sticky="new", padx=10, pady=10)
+        top_holdings_frame.grid(row=1, column=0, sticky="new", padx=10, pady=10)
         top_holdings_frame.grid_columnconfigure(0, weight=1) 
         ctk.CTkLabel(top_holdings_frame, text="Top Consolidated Holdings", font=ctk.CTkFont(weight="bold", size=16)).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,5))
         holdings_cols = ("ticker", "name", "sector", "weight")
         self.top_holdings_treeview = ttk.Treeview(top_holdings_frame, columns=holdings_cols, show="headings", height=18) 
-        self.top_holdings_treeview.heading("ticker", text="Ticker"); self.top_holdings_treeview.heading("name", text="Name"); self.top_holdings_treeview.heading("sector", text="Sector"); self.top_holdings_treeview.heading("weight", text="Weight (%)")
-        self.top_holdings_treeview.column("ticker", width=120, anchor=tk.W, stretch=tk.NO); self.top_holdings_treeview.column("name", width=350, anchor=tk.W, stretch=tk.YES); self.top_holdings_treeview.column("sector", width=200, anchor=tk.W, stretch=tk.NO); self.top_holdings_treeview.column("weight", width=100, anchor=tk.E, stretch=tk.NO) 
+        self.top_holdings_treeview.heading("ticker", text="Ticker"); self.top_holdings_treeview.column("ticker", width=120, anchor=tk.W, stretch=tk.NO)
+        self.top_holdings_treeview.heading("name", text="Name"); self.top_holdings_treeview.column("name", width=350, anchor=tk.W, stretch=tk.YES)
+        self.top_holdings_treeview.heading("sector", text="Sector"); self.top_holdings_treeview.column("sector", width=200, anchor=tk.W, stretch=tk.NO)
+        self.top_holdings_treeview.heading("weight", text="Weight (%)"); self.top_holdings_treeview.column("weight", width=100, anchor=tk.E, stretch=tk.NO)
         self.top_holdings_treeview.grid(row=1, column=0, sticky="nsew", pady=(0,5))
         holdings_scrollbar = ctk.CTkScrollbar(top_holdings_frame, command=self.top_holdings_treeview.yview); holdings_scrollbar.grid(row=1, column=1, sticky="ns", pady=(0,5)); self.top_holdings_treeview.configure(yscrollcommand=holdings_scrollbar.set)
-        style = ttk.Style(); bg_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["fg_color"]); text_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkLabel"]["text_color"]); selected_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTkButton"]["fg_color"])
-        style.theme_use("default"); style.configure("Treeview", background=bg_color, foreground=text_color, fieldbackground=bg_color, borderwidth=0, font=self.table_row_font); style.map("Treeview", background=[('selected', selected_color)], foreground=[('selected', text_color)])
-        style.configure("Treeview.Heading", background=self._apply_appearance_mode(ctk.ThemeManager.theme["CTkFrame"]["border_color"]), foreground=text_color, relief="flat", font=self.table_header_font, padding=(5,5)); style.map("Treeview.Heading", background=[('active', self._apply_appearance_mode(ctk.ThemeManager.theme["CTkButton"]["hover_color"]))])
-        self.refresh_dashboard_btn = ctk.CTkButton(top_holdings_frame, text="Refresh Dashboard Data", command=self._update_dashboard_displays); self.refresh_dashboard_btn.grid(row=2, column=0, columnspan=2, sticky="w", pady=10)
-        pie_chart_frame = ctk.CTkFrame(scrollable_dashboard_frame); pie_chart_frame.grid(row=1, column=0, sticky="new", padx=10, pady=10)
+        
+        style = ttk.Style()
+        bg_color = "#2B2B2B"; text_color = "#DCE4EE"; selected_color = "#2A8C55"; header_bg_color = "#343638"
+        style.theme_use("default"); style.configure("Treeview", background=bg_color, foreground=text_color, fieldbackground=bg_color, borderwidth=0, font=self.table_row_font); style.map("Treeview", background=[('selected', selected_color)])
+        style.configure("Treeview.Heading", background=header_bg_color, foreground=text_color, relief="flat", font=self.table_header_font, padding=(5,5)); style.map("Treeview.Heading", background=[('active', "#3E4143")])
+
+        backtester_frame = ctk.CTkFrame(scrollable_dashboard_frame)
+        backtester_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
+        backtester_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(backtester_frame, text="Performance Backtest", font=ctk.CTkFont(weight="bold", size=16)).grid(row=0, column=0, columnspan=2, sticky="w", pady=5, padx=5)
+        
+        backtest_controls_frame = ctk.CTkFrame(backtester_frame, fg_color="transparent")
+        backtest_controls_frame.grid(row=1, column=0, sticky="ew", padx=5)
+        
+        ctk.CTkLabel(backtest_controls_frame, text="Rebalancing:").pack(side=tk.LEFT)
+        self.rebalancing_period_var = tk.StringVar(value=list(config.REBALANCING_PERIODS.keys())[0])
+        rebalance_dd = ctk.CTkOptionMenu(backtest_controls_frame, variable=self.rebalancing_period_var, values=list(config.REBALANCING_PERIODS.keys()))
+        rebalance_dd.pack(side=tk.LEFT, padx=5)
+        run_backtest_btn = ctk.CTkButton(backtest_controls_frame, text="Run Backtest & Show Chart", command=self._run_backtest)
+        run_backtest_btn.pack(side=tk.LEFT, padx=5)
+        
+        # --- New Statistics Table ---
+        stats_frame = ctk.CTkFrame(backtester_frame)
+        stats_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        stats_frame.grid_columnconfigure(0, weight=1)
+        
+        stats_cols = ("period", "return", "std_dev", "sharpe")
+        self.stats_treeview = ttk.Treeview(stats_frame, columns=stats_cols, show="headings", height=10)
+        self.stats_treeview.heading("period", text="Period"); self.stats_treeview.column("period", width=120, anchor=tk.W)
+        self.stats_treeview.heading("return", text="Return (%)"); self.stats_treeview.column("return", width=120, anchor=tk.E)
+        self.stats_treeview.heading("std_dev", text="Annualized Std. Dev. (%)"); self.stats_treeview.column("std_dev", width=200, anchor=tk.E)
+        self.stats_treeview.heading("sharpe", text="Sharpe Ratio"); self.stats_treeview.column("sharpe", width=120, anchor=tk.E)
+        self.stats_treeview.grid(row=0, column=0, sticky="ew")
+        
+        pie_chart_frame = ctk.CTkFrame(scrollable_dashboard_frame)
+        pie_chart_frame.grid(row=3, column=0, sticky="new", padx=10, pady=10)
         ctk.CTkLabel(pie_chart_frame, text="Portfolio Allocation", font=ctk.CTkFont(weight="bold", size=16)).pack(anchor="w", pady=(0,5))
         self.allocation_chart_btn = ctk.CTkButton(pie_chart_frame, text="Show Allocation Chart (External)", command=self._generate_allocation_chart); self.allocation_chart_btn.pack(pady=5, anchor="w")
+        
         self._update_top_holdings_display() 
 
     def _apply_appearance_mode(self, color_tuple_or_str):
@@ -179,110 +220,163 @@ class FundSelectorApp(ctk.CTk):
         self._update_top_holdings_display()
 
     def _update_top_holdings_display(self):
-        for item in self.top_holdings_treeview.get_children():
-            self.top_holdings_treeview.delete(item)
+        for item in self.top_holdings_treeview.get_children(): self.top_holdings_treeview.delete(item)
 
-        if not self.portfolio:
+        if not self.portfolio or not self.detailed_fund_data:
             self.top_holdings_treeview.insert("", tk.END, values=("Portfolio is empty.", "", "", ""))
-            return
-        if not self.detailed_fund_data:
-            self.top_holdings_treeview.insert("", tk.END, values=("Detailed fund data not loaded.", "", "", ""))
+            self.portfolio_total_value_label.configure(text="Total Portfolio Value: N/A")
             return
             
         try:
             active_portfolio_df = pd.concat(self.portfolio, ignore_index=True)
-            valid_tickers = [p_df.iloc[0]['ticker'] for p_df in self.portfolio 
-                             if p_df.iloc[0]['ticker'] in self.detailed_fund_data and 
-                                self.detailed_fund_data[p_df.iloc[0]['ticker']].get("holdings") is not None and
-                                not self.detailed_fund_data[p_df.iloc[0]['ticker']]["holdings"].empty]
-            if not valid_tickers:
-                self.top_holdings_treeview.insert("", tk.END, values=("No detailed holdings for portfolio funds.", "", "", ""))
-                return
-
-            filtered_portfolio_list = [p_df for p_df in self.portfolio if p_df.iloc[0]['ticker'] in valid_tickers]
-            if not filtered_portfolio_list:
-                 self.top_holdings_treeview.insert("", tk.END, values=("No valid funds for holdings calculation.", "", "", ""))
-                 return
             
-            active_portfolio_df_filtered = pd.concat(filtered_portfolio_list, ignore_index=True)
-            relevant_detailed_data = { t: data for t, data in self.detailed_fund_data.items() if t in active_portfolio_df_filtered['ticker'].unique() }
-            
-            combined_df = calculate_combined_holdings(active_portfolio_df_filtered, relevant_detailed_data) 
-
-            if combined_df.empty:
-                self.top_holdings_treeview.insert("", tk.END, values=("No combined holdings data.", "", "", ""))
+            # --- Calculate Total Value and Update Label ---
+            _, total_value = calculate_portfolio_weights(active_portfolio_df, self.detailed_fund_data)
+            if total_value is not None:
+                currency_symbol = self.portfolio_currency_var.get()
+                self.portfolio_total_value_label.configure(text=f"Total Portfolio Value: {total_value:,.2f} {currency_symbol}")
             else:
-                weight_col_name = "Consolidated Weight" if "Consolidated Weight" in combined_df.columns else "Weight" 
-                if weight_col_name not in combined_df.columns: 
-                    self.top_holdings_treeview.insert("", tk.END, values=(f"Weight col '{weight_col_name}' missing.", "", "", ""))
-                    print(f"Debug: combined_df columns are {combined_df.columns}")
-                    return
+                self.portfolio_total_value_label.configure(text="Total Portfolio Value: N/A (Weight-based)")
 
-                # Show top N holdings based on config
+            # --- Continue with Holdings Display ---
+            valid_tickers = [p_df.iloc[0]['ticker'] for p_df in self.portfolio if p_df.iloc[0]['ticker'] in self.detailed_fund_data and self.detailed_fund_data[p_df.iloc[0]['ticker']].get("holdings") is not None and not self.detailed_fund_data[p_df.iloc[0]['ticker']]["holdings"].empty]
+            if not valid_tickers: self.top_holdings_treeview.insert("", tk.END, values=("No detailed holdings for portfolio funds.", "", "", "")); return
+            filtered_portfolio_list = [p_df for p_df in self.portfolio if p_df.iloc[0]['ticker'] in valid_tickers]
+            if not filtered_portfolio_list: self.top_holdings_treeview.insert("", tk.END, values=("No valid funds for holdings calculation.", "", "", "")); return
+            active_portfolio_df_filtered = pd.concat(filtered_portfolio_list, ignore_index=True)
+            relevant_detailed_data = {t: data for t, data in self.detailed_fund_data.items() if t in active_portfolio_df_filtered['ticker'].unique()}
+            combined_df = calculate_combined_holdings(active_portfolio_df_filtered, relevant_detailed_data) 
+            if combined_df.empty: self.top_holdings_treeview.insert("", tk.END, values=("No combined holdings data.", "", "", ""))
+            else:
+                weight_col_name = "Weight"
+                if weight_col_name not in combined_df.columns: self.top_holdings_treeview.insert("", tk.END, values=(f"Weight col '{weight_col_name}' missing.", "", "", "")); return
                 top_N_holdings = combined_df.nlargest(config.TOP_N_HOLDINGS, weight_col_name)
-                
                 for _, row in top_N_holdings.iterrows():
-                    ticker = str(row.get('Issuer Ticker', 'N/A'))
-                    name = str(row.get('Name', 'N/A'))
-                    sector = str(row.get('Sector', 'N/A'))
+                    ticker = str(row.get('Issuer Ticker', 'N/A')); name = str(row.get('Name', 'N/A')); sector = str(row.get('Sector', 'N/A'))
                     weight_val = row.get(weight_col_name, 0.0)
-                    # Format weight as percentage string for display
-                    weight_str = f"{weight_val:.2f}" if pd.notna(weight_val) else "N/A"
+                    weight_str = f"{weight_val:.2f}"
                     self.top_holdings_treeview.insert("", tk.END, values=(ticker, name, sector, weight_str))
-        
         except Exception as e:
             print(f"Error updating top holdings display: {e}")
-            error_message = f"Error: {str(e)}"
-            self.top_holdings_treeview.insert("", tk.END, values=(error_message[:50], "See console for details", "", ""))
+            self.top_holdings_treeview.insert("", tk.END, values=(f"Error: {str(e)[:50]}", "See console for details", "", ""))
 
 
     def _generate_allocation_chart(self):
-        if not self.portfolio: 
+        if not self.portfolio or not self.detailed_fund_data:
             messagebox.showwarning("Empty Portfolio", "Cannot generate chart for empty portfolio.", parent=self)
             return
         try:
             portfolio_df = pd.concat(self.portfolio, ignore_index=True)
-            names, values, chart_title = None, None, ""
-            if "weight" in portfolio_df.columns and portfolio_df["weight"].notna().any():
-                names = portfolio_df["ticker"]
-                values = portfolio_df["weight"]
-                chart_title = "Portfolio Allocation by Weight (%)"
-            elif "shares" in portfolio_df.columns and self.detailed_fund_data:
-                market_values, names_for_shares = [], []
-                for _, row in portfolio_df.iterrows():
-                    ticker, shares = row["ticker"], row["shares"]
-                    if ticker in self.detailed_fund_data and \
-                       self.detailed_fund_data[ticker].get("historical") is not None and \
-                       not self.detailed_fund_data[ticker]["historical"].empty:
-                        latest_nav = self.detailed_fund_data[ticker]["historical"]["NAV"].iloc[-1]
-                        market_values.append(latest_nav * shares)
-                        names_for_shares.append(ticker)
-                    else: 
-                        market_values.append(0) 
-                        names_for_shares.append(ticker)
-                if sum(market_values) == 0: 
-                    messagebox.showwarning("Chart Error", "Market values are zero or NAV missing.", parent=self)
-                    return
-                values = pd.Series(market_values)
-                names = pd.Series(names_for_shares)
-                chart_title = "Portfolio Allocation by Market Value"
-            else: 
-                messagebox.showwarning("Chart Error", "Insufficient data for allocation chart.", parent=self)
-                return
+            weights_dict, _ = calculate_portfolio_weights(portfolio_df, self.detailed_fund_data)
             
-            import plotly.graph_objects as go # Import here to avoid error if not installed globally
+            if not weights_dict:
+                messagebox.showwarning("Chart Error", "Could not calculate portfolio weights for the chart.")
+                return
 
+            names = list(weights_dict.keys())
+            values = [v * 100 for v in weights_dict.values()] # Convert to percentage for display
+            chart_title = f"Portfolio Allocation by Value ({self.portfolio_currency_var.get()})"
+            
+            import plotly.graph_objects as go
             fig = go.Figure(data=[go.Pie(labels=names, values=values, hole=.3, textinfo='label+percent')])
             fig.update_layout(title_text=chart_title, annotations=[dict(text='Funds', x=0.5, y=0.5, font_size=20, showarrow=False)])
-            chart_path = Path("data/temp_allocation_chart.html")
-            chart_path.parent.mkdir(parents=True, exist_ok=True) 
+            chart_path = config.TEMP_DIR / "temp_allocation_chart.html"
             fig.write_html(str(chart_path))
             webbrowser.open(chart_path.resolve().as_uri())
             messagebox.showinfo("Chart Generated", f"Chart opened in browser.\nFile: {chart_path}", parent=self)
-        except ImportError: 
+        except ImportError:
             messagebox.showerror("Plotly Missing", "'plotly' library required. Please install it.", parent=self)
-        except Exception as e: 
+        except Exception as e:
             messagebox.showerror("Chart Error", f"Could not generate chart: {e}", parent=self)
+
+    def _prepare_backtest_data(self) -> tuple[pd.DataFrame, pd.Series] | tuple[None, None]:
+        if not self.portfolio or not self.detailed_fund_data:
+            messagebox.showwarning("Missing Data", "Portfolio and detailed fund data are required for backtesting.")
+            return None, None
+        
+        all_returns_series = []
+        valid_tickers_for_backtest = []
+        inception_date = []
+        
+        for fund_df in self.portfolio:
+            ticker = fund_df.iloc[0]['ticker']
+            if ticker in self.detailed_fund_data and self.detailed_fund_data[ticker].get("historical") is not None:
+                hist_data = self.detailed_fund_data[ticker]["historical"]
+                if 'ccy_adj_return' in hist_data.columns and hist_data['ccy_adj_return'].notna().any():
+                    return_series = hist_data['ccy_adj_return'].rename(ticker)
+                    inception_date.append(return_series.index.min())
+                    all_returns_series.append(return_series)
+                    valid_tickers_for_backtest.append(ticker)
+        
+        if not all_returns_series:
+            messagebox.showwarning("Missing Data", "No currency-adjusted return data available for funds in the portfolio.")
+            return None, None
+            
+        asset_returns_df = pd.concat(all_returns_series, axis=1)
+        
+        latest_start_date = max(inception_date)
+        asset_returns_df = asset_returns_df.loc[latest_start_date:]
+        asset_returns_df.fillna(0, inplace=True)
+
+        if asset_returns_df.empty:
+            messagebox.showwarning("Date Range Error", "No common date range found for all assets in the portfolio.")
+            return None, None
+            
+        portfolio_df = pd.concat(self.portfolio, ignore_index=True)
+        valid_portfolio_df = portfolio_df[portfolio_df['ticker'].isin(valid_tickers_for_backtest)]
+        weights_dict, total_weight = calculate_portfolio_weights(valid_portfolio_df, self.detailed_fund_data)
+        weights_series = pd.Series(weights_dict)
+        
+        aligned_returns_df, aligned_weights_series = asset_returns_df.align(weights_series, axis=1, join='inner')
+
+        return aligned_returns_df, aligned_weights_series
+
+    def _run_backtest(self):
+        asset_returns, portfolio_weights = self._prepare_backtest_data()
+        if asset_returns is None or portfolio_weights is None: return
+
+        rebalance_period_name = self.rebalancing_period_var.get()
+        rebalance_code = config.REBALANCING_PERIODS[rebalance_period_name]
+        portfolio_currency = self.portfolio_currency_var.get()
+
+        try:
+            backtester = PortfolioBackteser(
+                portfolio_weights=portfolio_weights,
+                asset_returns=asset_returns,
+                rebalancing_period=rebalance_code,
+                portfolio_currency=portfolio_currency
+            )
+            
+            statistics = backtester.calculate_statistics()
+            self._display_backtest_statistics(statistics)
+
+            cumulative_performance = (1 + backtester.portfolio_return_series).cumprod()
+            import plotly.graph_objects as go
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=cumulative_performance.index, y=cumulative_performance, mode='lines', name='Portfolio Performance'))
+            fig.update_layout(
+                title=f"Portfolio Performance (Rebalanced {rebalance_period_name})",
+                xaxis_title="Date", yaxis_title="Cumulative Growth", yaxis_type="log"
+            )
+            chart_path = config.TEMP_DIR / "temp_backtest_chart.html"
+            fig.write_html(str(chart_path))
+            webbrowser.open(chart_path.resolve().as_uri())
+
+        except Exception as e:
+            messagebox.showerror("Backtest Error", f"An error occurred while running the backtest:\n{e}", parent=self)
+
+    def _display_backtest_statistics(self, statistics: dict):
+        """Displays performance stats in the UI table."""
+        for item in self.stats_treeview.get_children():
+            self.stats_treeview.delete(item)
+
+        for period_name, stats in statistics.items():
+            if pd.notna(stats['return']):
+                return_str = f"{stats['return'] * 100:.2f}%"
+                std_dev_str = f"{stats['std_dev'] * 100:.2f}%"
+                sharpe_str = f"{stats['sharpe']:.2f}"
+                self.stats_treeview.insert("", tk.END, values=(period_name, return_str, std_dev_str, sharpe_str))
+
 
     def _update_data_display_textbox(self):
         self.data_display_textbox.configure(state="normal")
@@ -723,51 +817,80 @@ class FundSelectorApp(ctk.CTk):
         threading.Thread(target=self._perform_detailed_data_download, daemon=True).start()
 
     def _perform_detailed_data_download(self):
+        """Worker function to download detailed data. Runs in a separate thread."""
         print("Starting detailed data download...")
-        dld_tickers = []
-        Path("data/raw").mkdir(parents=True, exist_ok=True) 
+        portfolio_currency = self.portfolio_currency_var.get() # Get selected currency
+        downloaded_tickers = []
         try:
-            SessCls, SheetsCls = IsharesSession, FundSheets
-            with SessCls(chrome_binary=config.BRAVE_BROWSER_PATH, chromedriver_path=config.CHROMEDRIVER_PATH) as sess:
+            SessionClass = IsharesSession
+            SheetsClass = FundSheets
+            with SessionClass(chrome_binary=config.BRAVE_BROWSER_PATH, chromedriver_path=config.CHROMEDRIVER_PATH) as sess:
                 num_funds = len(self.portfolio)
-                if num_funds == 0: 
-                    print("Portfolio empty.")
-                    self.after(0, lambda: messagebox.showinfo("No Funds","Portfolio empty"))
-                    return
-                for i, fund_rec_df in enumerate(self.portfolio):
-                    if not self.is_downloading_details: 
+                if num_funds == 0:
+                    print("No funds in portfolio to download details for.")
+                    self.after(0, lambda: messagebox.showinfo("No Funds", "Portfolio is empty. Add funds to download details."))
+                    return # Exit early if portfolio is empty
+
+                for i, fund_record_df in enumerate(self.portfolio):
+                    if not self.is_downloading_details:
                         print("Download cancelled.")
                         break 
-                    if fund_rec_df.empty: 
+                    if fund_record_df.empty:
                         continue
-                    fund_rec = fund_rec_df.iloc[0]
-                    fund_link = fund_rec.get("link")
-                    fund_tkr = fund_rec.get("ticker", f"unk_{i}")
-                    if not fund_link or fund_link == "N/A" or not isinstance(fund_link, str) or not fund_link.startswith("http"): 
-                        print(f"Skipping {fund_tkr}: Bad link ('{fund_link}').")
-                        self.after(0, lambda p=(i+1)/num_funds, ft=fund_tkr: (self.detailed_data_progress.set(p) if self.detailed_data_progress.winfo_ismapped() else None, print(f"Prog skip {ft}: {p*100:.1f}%")))
+                    fund_record = fund_record_df.iloc[0]
+                    
+                    fund_link = fund_record.get("link")
+                    fund_ticker = fund_record.get("ticker", f"unk_{i}")
+                    fund_currency = fund_record.get("currency") # Get the fund's specific currency
+
+                    if not fund_link or fund_link == "N/A" or not isinstance(fund_link, str) or not fund_link.startswith("http"):
+                        print(f"Skipping {fund_ticker}: Invalid or missing link ('{fund_link}').")
+                        # Schedule UI update for progress from main thread
+                        self.after(0, lambda p=(i+1)/num_funds, ft=fund_ticker: 
+                            (self.detailed_data_progress.set(p) if self.detailed_data_progress.winfo_ismapped() else None,
+                            print(f"Progress update for skipped {ft}: {p*100:.1f}%"))
+                        )
                         continue
+                    
                     try:
-                        print(f"Downloading: {fund_tkr} ({fund_link})")
-                        xls_link = sess.xls_link_from_product_page(fund_link)
-                        xls_path = sess.download_xls(xls_link, overwrite=True)
-                        sheets = SheetsCls(xls_path, portfolio_currency= self.portfolio_currency_var.get())
-                        hld = sheets.holdings.copy() if sheets.holdings is not None else pd.DataFrame()
-                        hist = sheets.historical.copy() if sheets.historical is not None else pd.DataFrame()
-                        distrib = sheets.distributions.copy() if sheets.distributions is not None else pd.DataFrame()
-                        self.detailed_fund_data[fund_tkr] = {"holdings": hld, "historical": hist, "distributions": distrib, "source_xls": str(xls_path)}
-                        dld_tickers.append(fund_tkr)
-                        print(f"Processed: {fund_tkr}")
-                    except Exception as e: 
-                        print(f"Error for {fund_tkr} ({fund_link}): {e}")
-                        self.after(0, lambda ft=fund_tkr, em=str(e): messagebox.showerror("Download Error", f"Error for {ft}:\n{em}"))
-                    self.after(0, lambda p=(i+1)/num_funds, ft=fund_tkr: (self.detailed_data_progress.set(p) if self.detailed_data_progress.winfo_ismapped() else None, print(f"Prog for {ft}: {p*100:.1f}%")))
-            if self.is_downloading_details : 
-                self.last_data_pull_info = {"date": time.strftime("%Y-%m-%d %H:%M:%S"), "tickers": dld_tickers}
-        except Exception as e: 
-            print(f"Session error: {e}")
-            self.after(0, lambda em=str(e): messagebox.showerror("Download Failed", f"Session error: {em}"))
-        finally: 
+                        print(f"Downloading data for {fund_ticker} (Link: {fund_link})...")
+                        xls_main_link = sess.xls_link_from_product_page(fund_link)
+                        xls_path = sess.download_xls(xls_main_link, overwrite=True) 
+                        
+                        # Pass both the fund's currency and the target portfolio currency
+                        sheets = SheetsClass(
+                            xls_path, 
+                            fund_currency=fund_currency, 
+                            portfolio_currency=portfolio_currency
+                        )
+                        
+                        self.detailed_fund_data[fund_ticker] = {
+                            "holdings": sheets.holdings.copy() if sheets.holdings is not None else pd.DataFrame(),
+                            "historical": sheets.historical.copy() if sheets.historical is not None else pd.DataFrame(),
+                            "distributions": sheets.distributions.copy() if sheets.distributions is not None else pd.DataFrame(),
+                            "source_xls": str(xls_path) 
+                        }
+                        downloaded_tickers.append(fund_ticker)
+                        print(f"Successfully processed data for {fund_ticker}")
+                    except Exception as e:
+                        print(f"Error downloading/parsing data for {fund_ticker} (Link: {fund_link}): {e}")
+                        # Schedule messagebox from main thread
+                        self.after(0, lambda ft=fund_ticker, em=str(e): messagebox.showerror("Download Error", f"Error for {ft}:\n{em}"))
+                    
+                    # Update progress bar (via self.after for thread safety)
+                    progress_val = (i + 1) / num_funds
+                    self.after(0, lambda p=progress_val, ft=fund_ticker: 
+                        (self.detailed_data_progress.set(p) if self.detailed_data_progress.winfo_ismapped() else None,
+                        print(f"Progress update for {ft}: {p*100:.1f}%"))
+                    )
+
+            if self.is_downloading_details : # Only update if not cancelled
+                self.last_data_pull_info = {"date": time.strftime("%Y-%m-%d %H:%M:%S"), "tickers": downloaded_tickers}
+
+        except Exception as e:
+            print(f"Major error during detailed data download session: {e}")
+            self.after(0, lambda err_msg=str(e): messagebox.showerror("Download Failed", f"Could not complete data download: {err_msg}"))
+        finally:
             self.is_downloading_details = False
             self.after(0, self._finalize_detailed_download_ui)
 

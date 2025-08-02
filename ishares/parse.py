@@ -23,10 +23,10 @@ class FundSheets:
     Loads data from iShares' XML-based .xls files by converting worksheets to 
     temporary CSVs and then parsing them with pandas.
     """
-    def __init__(self, xls_path: Path, portfolio_currency: str):
+    def __init__(self, xls_path: Path, fund_currency: str, portfolio_currency: str):
         self.xls_path = xls_path
         self.portfolio_currency = portfolio_currency
-        self.fund_currency: str | None = None 
+        self.fund_currency = fund_currency
         self.holdings: pd.DataFrame | None = None
         self.historical: pd.DataFrame | None = None
         self.distributions: pd.DataFrame | None = None
@@ -89,12 +89,14 @@ class FundSheets:
                         
                         self.historical.rename(columns={"As Of": "date", "Currency":"currency"}, inplace=True)
                         self.historical.set_index("date", inplace=True)
-                        self._calculate_returns(self.historical)
-                        self.historical.join( fetch_currency_data(
+
+                        self.historical = self.historical.join( fetch_currency_data(
                             fund_currency = self.fund_currency, 
                             portfolio_currency = self.portfolio_currency, 
                             start_date = min(self.historical.index), 
                             end_date = max(self.historical.index ) ) )
+                        self.historical['fx_rate'].ffill(inplace=True)
+                        self._calculate_returns(self.historical)
                         
                     elif name == "distributions":
                         self.distributions = pd.read_csv(csv_path, encoding="utf-8-sig")
@@ -155,3 +157,5 @@ class FundSheets:
             df["Log Return"] = np.nan
             df['ccy_adj_return'] = np.nan
             df['ccy_adj_log_return'] = np.nan
+
+        df.replace([np.inf, -np.inf], 0, inplace=True)

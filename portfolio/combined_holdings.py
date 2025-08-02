@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 
-def _calculate_portfolio_weights(portfolio: pd.DataFrame, detailed_fund_data: dict) -> dict:
+def calculate_portfolio_weights(portfolio: pd.DataFrame, detailed_fund_data: dict) -> dict:
+    total = None
     if "shares" in portfolio.columns:
         abs_value_dict = {
             ticker: detailed_fund_data[ticker]["historical"].iloc[0]["NAV"] * detailed_fund_data[ticker]["historical"].iloc[0]["fx_rate"] *
@@ -16,7 +17,7 @@ def _calculate_portfolio_weights(portfolio: pd.DataFrame, detailed_fund_data: di
         for row in portfolio.index:
             relative_value_dict[portfolio.iloc[row]["ticker"]] = portfolio.iloc[row]["weight"]/100
 
-    return relative_value_dict
+    return relative_value_dict, total
 
 def calculate_combined_holdings(portfolio: pd.DataFrame, detailed_fund_data: dict) -> pd.DataFrame:
     """
@@ -30,7 +31,7 @@ def calculate_combined_holdings(portfolio: pd.DataFrame, detailed_fund_data: dic
         pd.DataFrame: DataFrame with combined holdings.
     """
     combined_holdings = pd.DataFrame()
-    weights = _calculate_portfolio_weights(portfolio, detailed_fund_data)
+    weights, _ = calculate_portfolio_weights(portfolio, detailed_fund_data)
     for ticker in detailed_fund_data.keys():
         try:
             ticker_data = detailed_fund_data[ticker]["holdings"][["Issuer Ticker", "Name", "Sector", "Weight (%)"]]
@@ -52,7 +53,5 @@ def calculate_combined_holdings(portfolio: pd.DataFrame, detailed_fund_data: dic
     
     result_df = combined_holdings.sort_values(
         by=["Weight"], ascending=False, inplace=False)
-    print(f"Type of result_df in calculate_combined_holdings: {type(result_df)}") # DEBUG
-    print(result_df.head() if not result_df.empty else "Result_df is empty") # DEBUG
     return result_df
     

@@ -1,5 +1,7 @@
 import yfinance as yf
 from datetime import timedelta
+import pandas as pd
+import numpy as np
 
 def fetch_currency_data(fund_currency: str, portfolio_currency: str, start_date: str, end_date: str) -> yf.Ticker:
     """
@@ -15,9 +17,10 @@ def fetch_currency_data(fund_currency: str, portfolio_currency: str, start_date:
         yf.Ticker: A yfinance Ticker object containing the currency data.
     """
     if fund_currency == portfolio_currency:
-        return None
+        date_range = pd.date_range(start=start_date, end=end_date, freq="D").tz_localize(None)
+        return pd.DataFrame(np.zeros(len(date_range))+1, index=date_range, columns=["fx_rate"])
 
-    ticker_symbol = f"{portfolio_currency}{fund_currency}=X"
+    ticker_symbol = f"{fund_currency}{portfolio_currency}=X"
     ticker = yf.Ticker(ticker_symbol)
     ticker_data = ticker.history(start=start_date-timedelta(days=1), end=end_date+timedelta(days=1), interval="1d")
 

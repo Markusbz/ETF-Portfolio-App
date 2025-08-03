@@ -36,7 +36,6 @@ def calculate_combined_holdings(portfolio: pd.DataFrame, detailed_fund_data: dic
         try:
             ticker_data = detailed_fund_data[ticker]["holdings"][["Issuer Ticker", "Name", "Sector", "Weight (%)"]]
             ticker_data.rename(columns={"Weight (%)": "Weight"}, inplace=True)
-            print(ticker_data)
             ticker_data["Weight"] *= weights[ticker]
             combined_holdings = pd.concat( [
                 combined_holdings,

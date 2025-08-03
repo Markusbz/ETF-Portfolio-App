@@ -69,7 +69,7 @@ class PortfolioBackteser:
         num_years = len(returns_period) / 252.0
         annualized_return = ((1 + total_return) ** (1 / num_years)) - 1 if num_years > 1 else total_return
 
-        adj_rf = (self.risk_free_rate + 1) ** 1/ num_years - 1 if num_years > 1 else self.risk_free_rate
+        adj_rf = (self.risk_free_rate + 1) ** 1/ num_years - 1 if num_years < 1 else self.risk_free_rate
         excess_return = annualized_return - adj_rf
         sharpe_ratio = excess_return / annualized_std if annualized_std > 0 else np.nan
         

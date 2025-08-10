@@ -54,7 +54,8 @@ REBALANCING_PERIODS = {
     "Monthly": "m",
     "Quarterly": "q",
     "Semi-Annually": "sa",
-    "Annually": "y"
+    "Annually": "y",
+    "None": "none",  # No rebalancing
 }
 
 print(f"Config loaded. Data directory set to: {DATA_DIR.resolve()}")

@@ -5,7 +5,7 @@ import datetime
 import pandas_datareader.data as web
 import xml.etree.ElementTree as ET
 
-class PortfolioBackteser:
+class PortfolioBacktester:
     def __init__(self, portfolio_weights: pd.Series, asset_returns: pd.DataFrame, rebalancing_period: str, portfolio_currency: str):
         self.portfolio_weights = portfolio_weights
         self.asset_returns = asset_returns
@@ -26,29 +26,34 @@ class PortfolioBackteser:
             portfolio_return = self.portfolio_weights.dot(self.asset_returns.T)
             return portfolio_return
 
+        portfolio_returns_np = np.empty(n_days)
+        current_weights_np = np.copy(weights_np)
+
         period_markers_map = {
             'w': self.asset_returns.index.isocalendar().week,
             'bw': (self.asset_returns.index - self.asset_returns.index[0]).days // 14,
             'm': self.asset_returns.index.month,
             'q': self.asset_returns.index.quarter,
             'sa': (self.asset_returns.index.month - 1) // 6,
-            'y': self.asset_returns.index.year
+            'y': self.asset_returns.index.year,
+            'none': None
         }
+
         if self.rebalancing_period not in period_markers_map:
-            raise ValueError("rebalancing_period must be one of 'w', 'bw', 'm', 'q', 'sa', 'y'")
-        
-        period_markers = period_markers_map[self.rebalancing_period].to_numpy()
-        
-        portfolio_returns_np = np.empty(n_days)
-        current_weights_np = np.copy(weights_np)
-        
+            raise ValueError("rebalancing_period must be one of 'd', 'w', 'bw', 'm', 'q', 'sa', 'y', 'none'")
+
+        period_markers = period_markers_map[self.rebalancing_period]
+        if period_markers is not None:
+            period_markers = period_markers.to_numpy()
+
         for i in range(n_days):
             day_return = np.sum(current_weights_np * returns_np[i])
             portfolio_returns_np[i] = day_return
 
             if i < n_days - 1:
-                if period_markers[i+1] != period_markers[i]:
+                if period_markers is not None and period_markers[i+1] != period_markers[i]:
                     current_weights_np = np.copy(weights_np)
+                    
                 else:
                     new_values = current_weights_np * (1 + returns_np[i])
                     total_value = np.sum(new_values)
@@ -57,7 +62,7 @@ class PortfolioBackteser:
 
         return pd.Series(portfolio_returns_np, index=self.asset_returns.index)
 
-    def _calculate_period_stats(self, returns_period: pd.Series) -> dict:
+    def calculate_period_stats(self, returns_period: pd.Series) -> dict:
         """Helper to calculate stats for a given period of returns."""
         if returns_period.empty or len(returns_period) < 2:
             return {'return': np.nan, 'std_dev': np.nan, 'sharpe': np.nan}
@@ -107,13 +112,13 @@ class PortfolioBackteser:
                 continue
             period_returns = returns[start_date:]
             if not period_returns.empty:
-                stats[name] = self._calculate_period_stats(period_returns)
+                stats[name] = self.calculate_period_stats(period_returns)
             else:
                 stats[name] = {'return': np.nan, 'std_dev': np.nan, 'sharpe': np.nan}
         
         first_date_str = datetime.datetime.strftime(first_date, "%d-%m-%Y")
         end_date_str = datetime.datetime.strftime(end_date, "%d-%m-%Y")
-        stats[f"Since Inception ({first_date_str} - {end_date_str})"] = self._calculate_period_stats(returns)
+        stats[f"Since Inception ({first_date_str} - {end_date_str})"] = self.calculate_period_stats(returns)
         
         return stats
 

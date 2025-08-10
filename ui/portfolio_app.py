@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import pandas as pd
+import numpy as np
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog
@@ -20,7 +21,8 @@ from ..ishares import universe
 from ..ishares.fetch import IsharesSession
 from ..ishares.parse import FundSheets
 from ..portfolio.combined_holdings import calculate_combined_holdings, calculate_portfolio_weights
-from ..portfolio.backtester import PortfolioBackteser
+from ..portfolio.backtester import PortfolioBacktester
+from ..portfolio.optimize import PortfolioOptimizer
 from ..plotting.plotly_charts import plot_backtest_results
 from .. import config
 
@@ -80,7 +82,8 @@ class FundSelectorApp(ctk.CTk):
         self.tab_view.pack(expand=True, fill="both", padx=10, pady=(0,10))
         self.portfolio_builder_tab = self.tab_view.add("Portfolio Builder")
         self.data_center_tab = self.tab_view.add("Data Center")
-        self.dashboard_tab = self.tab_view.add("Portfolio Dashboard") 
+        self.dashboard_tab = self.tab_view.add("Portfolio Dashboard")
+
         self.tab_view.set("Portfolio Builder") 
 
         self._create_portfolio_builder_ui(self.portfolio_builder_tab)
@@ -178,7 +181,7 @@ class FundSelectorApp(ctk.CTk):
         backtester_frame = ctk.CTkFrame(scrollable_dashboard_frame)
         backtester_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=10)
         backtester_frame.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(backtester_frame, text="Performance Backtest", font=ctk.CTkFont(weight="bold", size=16)).grid(row=0, column=0, columnspan=2, sticky="w", pady=5, padx=5)
+        ctk.CTkLabel(backtester_frame, text="Performance Backtest & Optimization", font=ctk.CTkFont(weight="bold", size=16)).grid(row=0, column=0, columnspan=2, sticky="w", pady=5, padx=5)
         
         backtest_controls_frame = ctk.CTkFrame(backtester_frame, fg_color="transparent")
         backtest_controls_frame.grid(row=1, column=0, sticky="ew", padx=5)
@@ -187,28 +190,135 @@ class FundSelectorApp(ctk.CTk):
         self.rebalancing_period_var = tk.StringVar(value=list(config.REBALANCING_PERIODS.keys())[0])
         rebalance_dd = ctk.CTkOptionMenu(backtest_controls_frame, variable=self.rebalancing_period_var, values=list(config.REBALANCING_PERIODS.keys()))
         rebalance_dd.pack(side=tk.LEFT, padx=5)
-        run_backtest_btn = ctk.CTkButton(backtest_controls_frame, text="Run Backtest & Show Chart", command=self._run_backtest)
+        run_backtest_btn = ctk.CTkButton(backtest_controls_frame, text="Run Backtest & Optimize", command=self._run_optimization)
         run_backtest_btn.pack(side=tk.LEFT, padx=5)
         
-        # --- New Statistics Table ---
+        # --- New Weights Comparison Table ---
+        weights_frame = ctk.CTkFrame(backtester_frame)
+        weights_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        weights_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(weights_frame, text="Optimized Portfolio Weights", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(0,5))
+        weights_cols = ("ticker", "weight_orig", "weight_opt")
+        self.weights_treeview = ttk.Treeview(weights_frame, columns=weights_cols, show="headings", height=8)
+        self.weights_treeview.heading("ticker", text="Ticker"); self.weights_treeview.column("ticker", width=120, anchor=tk.W)
+        self.weights_treeview.heading("weight_orig", text="Original Weight (%)"); self.weights_treeview.column("weight_orig", width=150, anchor=tk.E)
+        self.weights_treeview.heading("weight_opt", text="Optimized Weight (%)"); self.weights_treeview.column("weight_opt", width=150, anchor=tk.E)
+        self.weights_treeview.pack(fill="x", expand=True)
+
+        # --- Statistics Table ---
         stats_frame = ctk.CTkFrame(backtester_frame)
-        stats_frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        stats_frame.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
         stats_frame.grid_columnconfigure(0, weight=1)
         
-        stats_cols = ("period", "return", "std_dev", "sharpe")
-        self.stats_treeview = ttk.Treeview(stats_frame, columns=stats_cols, show="headings", height=10)
+        stats_cols = ("period", "ret_orig", "std_orig", "sharpe_orig", "ret_opt", "std_opt", "sharpe_opt")
+        self.stats_treeview = ttk.Treeview(stats_frame, columns=stats_cols, show="headings", height=11)
         self.stats_treeview.heading("period", text="Period"); self.stats_treeview.column("period", width=120, anchor=tk.W)
-        self.stats_treeview.heading("return", text="Return (%)"); self.stats_treeview.column("return", width=120, anchor=tk.E)
-        self.stats_treeview.heading("std_dev", text="Annualized Std. Dev. (%)"); self.stats_treeview.column("std_dev", width=200, anchor=tk.E)
-        self.stats_treeview.heading("sharpe", text="Sharpe Ratio"); self.stats_treeview.column("sharpe", width=120, anchor=tk.E)
+        self.stats_treeview.heading("ret_orig", text="Return (Orig)"); self.stats_treeview.column("ret_orig", width=120, anchor=tk.E)
+        self.stats_treeview.heading("std_orig", text="Std. Dev. (Orig)"); self.stats_treeview.column("std_orig", width=120, anchor=tk.E)
+        self.stats_treeview.heading("sharpe_orig", text="Sharpe (Orig)"); self.stats_treeview.column("sharpe_orig", width=120, anchor=tk.E)
+        self.stats_treeview.heading("ret_opt", text="Return (Opt)"); self.stats_treeview.column("ret_opt", width=120, anchor=tk.E)
+        self.stats_treeview.heading("std_opt", text="Std. Dev. (Opt)"); self.stats_treeview.column("std_opt", width=120, anchor=tk.E)
+        self.stats_treeview.heading("sharpe_opt", text="Sharpe (Opt)"); self.stats_treeview.column("sharpe_opt", width=120, anchor=tk.E)
         self.stats_treeview.grid(row=0, column=0, sticky="ew")
         
         pie_chart_frame = ctk.CTkFrame(scrollable_dashboard_frame)
-        pie_chart_frame.grid(row=3, column=0, sticky="new", padx=10, pady=10)
+        pie_chart_frame.grid(row=4, column=0, sticky="new", padx=10, pady=10)
         ctk.CTkLabel(pie_chart_frame, text="Portfolio Allocation", font=ctk.CTkFont(weight="bold", size=16)).pack(anchor="w", pady=(0,5))
         self.allocation_chart_btn = ctk.CTkButton(pie_chart_frame, text="Show Allocation Chart (External)", command=self._generate_allocation_chart); self.allocation_chart_btn.pack(pady=5, anchor="w")
         
-        self._update_top_holdings_display() 
+        self._update_top_holdings_display()
+
+    def _run_optimization(self):
+        asset_returns, portfolio_weights = self._prepare_backtest_data()
+        if asset_returns is None or portfolio_weights is None: return
+
+        rebalance_period_name = self.rebalancing_period_var.get()
+        rebalance_code = config.REBALANCING_PERIODS[rebalance_period_name]
+        portfolio_currency = self.portfolio_currency_var.get()
+
+        try:
+            original_backtester = PortfolioBacktester(
+                portfolio_weights=portfolio_weights, asset_returns=asset_returns,
+                rebalancing_period=rebalance_code, portfolio_currency=portfolio_currency
+            )
+            original_stats = original_backtester.calculate_statistics()
+
+            optimizer = PortfolioOptimizer(original_backtester)
+            bounds = [(0, 1) for _ in range(len(portfolio_weights))]
+            constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+            optimized_weights = optimizer.optimize_portfolio(bounds=bounds, constraints=[constraints])
+
+            optimized_backtester = PortfolioBacktester(
+                portfolio_weights=optimized_weights, asset_returns=asset_returns,
+                rebalancing_period=rebalance_code, portfolio_currency=portfolio_currency
+            )
+            optimized_stats = optimized_backtester.calculate_statistics()
+            
+            self._display_weights_comparison(portfolio_weights, optimized_weights)
+            self._display_comparison_statistics(original_stats, optimized_stats)
+            self._plot_comparison_chart(original_backtester, optimized_backtester, rebalance_period_name)
+
+        except Exception as e:
+            messagebox.showerror("Optimization Error", f"An error occurred during optimization:\n{e}", parent=self)
+
+    def _display_weights_comparison(self, original_weights: pd.Series, optimized_weights: pd.Series):
+        """Displays a side-by-side comparison of portfolio weights."""
+        for item in self.weights_treeview.get_children():
+            self.weights_treeview.delete(item)
+        
+        weights_df = pd.DataFrame({'Original': original_weights, 'Optimized': optimized_weights})
+        for ticker, row in weights_df.iterrows():
+            orig_weight_str = f"{row['Original'] * 100:.2f}%"
+            opt_weight_str = f"{row['Optimized'] * 100:.2f}%"
+            self.weights_treeview.insert("", tk.END, values=(ticker, orig_weight_str, opt_weight_str))
+
+
+    def _display_comparison_statistics(self, original_stats: dict, optimized_stats: dict):
+        """Displays a side-by-side comparison of performance stats."""
+        for item in self.stats_treeview.get_children():
+            self.stats_treeview.delete(item)
+
+        for period_name in original_stats.keys():
+            orig = original_stats[period_name]
+            opt = optimized_stats[period_name]
+
+            if pd.notna(orig['return']):
+                orig_ret_str = f"{orig['return'] * 100:.2f}%"
+                orig_std_str = f"{orig['std_dev'] * 100:.2f}%"
+                orig_sharpe_str = f"{orig['sharpe']:.2f}"
+                opt_ret_str = f"{opt['return'] * 100:.2f}%"
+                opt_std_str = f"{opt['std_dev'] * 100:.2f}%"
+                opt_sharpe_str = f"{opt['sharpe']:.2f}"
+                
+                self.stats_treeview.insert("", tk.END, values=(
+                    period_name, orig_ret_str, orig_std_str, orig_sharpe_str,
+                    opt_ret_str, opt_std_str, opt_sharpe_str
+                ))
+
+    def _plot_comparison_chart(self, original_bt: PortfolioBacktester, optimized_bt: PortfolioBacktester, rebalance_period: str):
+        """Generates and shows a Plotly chart comparing two backtest results."""
+        try:
+            import plotly.graph_objects as go
+            
+            orig_perf = (1 + original_bt.portfolio_return_series).cumprod()
+            opt_perf = (1 + optimized_bt.portfolio_return_series).cumprod()
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=orig_perf.index, y=orig_perf, mode='lines', name='Original Portfolio'))
+            fig.add_trace(go.Scatter(x=opt_perf.index, y=opt_perf, mode='lines', name='Optimized Portfolio'))
+            
+            fig.update_layout(
+                title=f"Original vs. Optimized Performance (Rebalanced {rebalance_period})",
+                xaxis_title="Date", yaxis_title="Cumulative Growth", yaxis_type="log"
+            )
+            chart_path = config.TEMP_DIR / "temp_comparison_chart.html"
+            fig.write_html(str(chart_path))
+            webbrowser.open(chart_path.resolve().as_uri())
+
+        except ImportError:
+            messagebox.showerror("Plotly Missing", "'plotly' library required. Please install it.", parent=self)
+        except Exception as e:
+            messagebox.showerror("Chart Error", f"Could not generate comparison chart: {e}", parent=self)
 
     def _apply_appearance_mode(self, color_tuple_or_str):
         if isinstance(color_tuple_or_str, (list, tuple)): 
@@ -340,7 +450,7 @@ class FundSelectorApp(ctk.CTk):
         portfolio_currency = self.portfolio_currency_var.get()
 
         try:
-            backtester = PortfolioBackteser(
+            backtester = PortfolioBacktester(
                 portfolio_weights=portfolio_weights,
                 asset_returns=asset_returns,
                 rebalancing_period=rebalance_code,

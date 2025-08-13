@@ -37,8 +37,7 @@ CHROMEDRIVER_PATH = r"C:\Path\To\Your\ChromeDriver\chromedriver.exe"
 ```
 
 ### 2. Building a Portfolio
-Launch the app by running the main application file.
-
+Launch the app:
 ```python
 from etf_portfolio_app.ui.portfolio_app import FundSelectorApp
 

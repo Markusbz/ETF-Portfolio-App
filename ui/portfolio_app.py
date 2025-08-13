@@ -1,18 +1,14 @@
 from __future__ import annotations
-import os
 import pandas as pd
 import numpy as np
 import customtkinter as ctk
 import tkinter as tk
 from tkinter import filedialog
-from contextlib import suppress
 from collections import defaultdict
 from tkinter import messagebox, ttk
 from pathlib import Path
 import matplotlib
 matplotlib.use("TkAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import json
 import threading
 import time
@@ -23,7 +19,6 @@ from ..ishares.parse import FundSheets
 from ..portfolio.combined_holdings import calculate_combined_holdings, calculate_portfolio_weights
 from ..portfolio.backtester import PortfolioBacktester
 from ..portfolio.optimize import PortfolioOptimizer
-from ..plotting.plotly_charts import plot_backtest_results
 from .. import config
 
 ctk.set_appearance_mode("dark")

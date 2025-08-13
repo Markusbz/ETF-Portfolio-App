@@ -1,0 +1,12 @@
+beautifulsoup4==4.13.4
+customtkinter==5.2.2
+lxml==5.3.2
+matplotlib==3.7.2
+numpy==1.25.2
+pandas==2.3.1
+pandas_datareader==0.10.0
+plotly==5.20.0
+Requests==2.32.4
+scipy==1.16.1
+selenium==4.35.0
+yfinance==0.2.63
